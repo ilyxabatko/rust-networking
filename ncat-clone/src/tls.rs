@@ -30,11 +30,15 @@ pub async fn tls_connect(host: &String, port: &u16, ca: &Option<String>) -> Resu
     /*
     Since we're adding CA (Certificate Authority) locally, we need to add our certificate to the store
     And when we trying to connect to ourselves while running ncat-clone server, we don't have issues with CAs are being trusted
+
+    We can comment this snippet to make the connection to the server denied since the client won't trust the server's certificate.
     */
     if let Some(ca) = ca {
         for certificate in load_certs(Path::new(&ca))? {
-            root_cert_store.add(&certificate)
-                .map_err(|e| format!("Error adding the certificate: {}", e)).unwrap();  
+            root_cert_store
+                .add(&certificate)
+                .map_err(|e| format!("Error adding the certificate: {}", e))
+                .unwrap();
         }
     }
 
@@ -58,22 +62,6 @@ pub async fn tls_connect(host: &String, port: &u16, ca: &Option<String>) -> Resu
     Ok(())
 }
 
-fn load_certs(path: &Path) -> io::Result<Vec<Certificate>> {
-    let f = File::open(path)?;
-
-    return rustls_pemfile::certs(&mut BufReader::new(f))
-        .map_err(|_| Error::new(io::ErrorKind::InvalidInput, "invalid cert"))
-        .map(|mut certs| certs.drain(..).map(Certificate).collect());
-}
-
-fn load_keys(path: &Path) -> io::Result<Vec<PrivateKey>> {
-    let f = File::open(path)?;
-
-    rustls_pemfile::rsa_private_keys(&mut BufReader::new(f))
-        .map_err(|_| Error::new(io::ErrorKind::InvalidInput, "invalid key"))
-        .map(|mut keys| keys.drain(..).map(PrivateKey).collect())
-}
-
 pub async fn tls_listen(
     host: &String,
     port: &u16,
@@ -91,6 +79,7 @@ pub async fn tls_listen(
             ta.name_constraints,
         )
     }));
+
     if let Some(ca) = ca {
         for cert in load_certs(Path::new(ca.as_str()))? {
             root_cert_store
@@ -99,20 +88,25 @@ pub async fn tls_listen(
         }
     }
 
+    // We need to provide authentication to the client to tell him who we are
     let certs = load_certs(Path::new(cert.as_str()))?;
     let mut keys = load_keys(Path::new(key.as_str()))?;
     let config = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
-        .with_single_cert(certs, keys.remove(0))
+        .with_single_cert(certs, keys.remove(0)) // takes the first key out
         .map_err(|err| Error::new(io::ErrorKind::InvalidInput, err))?;
 
+    // accepts a connection
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
+    // binds to an address and waits for connections to it
     let listener = TcpListener::bind(&addr).await?;
 
+    // accepts the first connection we receved
     let (socket, _) = listener.accept().await?;
 
+    // wraps up the received socker from above and with the TLS acceptor to add TLS messaging
     let stream = acceptor.accept(socket).await?;
 
     let (reader, writer) = split(stream);
@@ -120,4 +114,20 @@ pub async fn tls_listen(
     read_write(reader, writer).await;
 
     Ok(())
+}
+
+fn load_certs(path: &Path) -> io::Result<Vec<Certificate>> {
+    let f = File::open(path)?;
+
+    return rustls_pemfile::certs(&mut BufReader::new(f))
+        .map_err(|_| Error::new(io::ErrorKind::InvalidInput, "invalid cert"))
+        .map(|mut certs| certs.drain(..).map(Certificate).collect());
+}
+
+fn load_keys(path: &Path) -> io::Result<Vec<PrivateKey>> {
+    let f = File::open(path)?;
+
+    rustls_pemfile::rsa_private_keys(&mut BufReader::new(f))
+        .map_err(|_| Error::new(io::ErrorKind::InvalidInput, "invalid key"))
+        .map(|mut keys| keys.drain(..).map(PrivateKey).collect())
 }

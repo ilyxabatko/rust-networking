@@ -20,8 +20,8 @@ where
             .unwrap();
     });
 
-    // Runs both work concurrently and stops woring when one of the workers is stopped
-    // Select is like "match", but for async code
+    // Runs both work concurrently and stops working when one of the workers is stopped
+    // the select! macro is like "match", but for async code
     tokio::select! {
         _ = client_read => {},
         _ = client_write => {}
